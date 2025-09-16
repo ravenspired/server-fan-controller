@@ -285,23 +285,25 @@ def percent_to_duty_u16(p):
     Map 0..100% input to 25..75% inverted PWM duty.
     0% -> 75% duty (slow)
     100% -> 25% duty (fast)
+    If p == -1, set duty percent to 90 (OFF).
     """
-    # clamp input
-    p = max(0, min(100, p))
-    
-    # map 0..100 -> 75..25 linearly
-    duty_percent = 75 - (p * 50 // 100)  # integer percent
-    
+    if p == -1:
+        duty_percent = 90
+    else:
+        # clamp input
+        p = max(0, min(100, p))
+        # map 0..100 -> 75..25 linearly
+        duty_percent = cast_percent(p)
+    print(f"writing {duty_percent}")
     # convert percent to u16 duty (0..65535)
     duty_u16 = int(duty_percent / 100 * 65535)
     return duty_u16
 
 
-def display_percent(p):
-    if p >= 90:
-        return 0  # OFF
-    # map 25..75 -> 100..0
-    return int((75 - p) * 2)
+def cast_percent(p):
+    # Map 1..100 to 75..25 (inverted)
+    # 1 -> 75, 100 -> 25
+    return int(75 - ((p - 1) * 50 / 99))
 
 # -------------------------
 # Setup hardware (pins)
@@ -321,9 +323,9 @@ pwm.freq(25000)  # typical for brushless fans (25 kHz). Adjust if needed.
 # -------------------------
 # Variables / state
 # -------------------------
-MIN_P = 25
-MAX_P = 75
-DEFAULT_P = 25
+MIN_P = 1
+MAX_P = 100
+DEFAULT_P = 1
 
 current_percent = DEFAULT_P  # user-set percent (25..75)
 saved_percent = current_percent  # used when toggling OFF/ON
@@ -333,7 +335,7 @@ DISPLAY_TIMEOUT_MS = 60_000  # 1 minute
 
 # initial apply
 pwm.duty_u16(percent_to_duty_u16(current_percent))
-draw_big_text(oled, "{:d}%".format(display_percent(current_percent)), scale=4)
+draw_big_text(oled, "{:d}%".format(current_percent), scale=4)
 
 
 # -------------------------
@@ -350,7 +352,7 @@ while True:
     steps = encoder.get_position()
     if steps != 0:
         # adjust percent: 1 step -> 1 percent change
-        current_percent = int(current_percent + steps)
+        current_percent = int(current_percent - steps)
         current_percent = clamp(current_percent, MIN_P, MAX_P)
         # when rotating while OFF (90%), update saved_percent not visible until toggled on
         if current_percent != 90:
@@ -364,7 +366,7 @@ while True:
             oled.poweron()
             display_on = True
         # redraw
-        draw_big_text(oled, "{:d}%".format(display_percent(current_percent)), scale=4)
+        draw_big_text(oled, "{:d}%".format(current_percent), scale=4)
 
 
     print(current_percent)
@@ -373,9 +375,9 @@ while True:
     btn.update()
     if btn.is_pressed:
         # toggle: if currently not OFF -> set to OFF (90) and save prior
-        if current_percent < 90:
+        if current_percent != -1:
             saved_percent = current_percent
-            current_percent = 90
+            current_percent = -1
             pwm.duty_u16(percent_to_duty_u16(current_percent))  # becomes 0
             # ensure display on and show OFF
             if not display_on:
@@ -389,7 +391,7 @@ while True:
             if not display_on:
                 oled.poweron()
                 display_on = True
-            draw_big_text(oled, "{:d}%".format(display_percent(current_percent)), scale=4)
+            draw_big_text(oled, "{:d}%".format(current_percent), scale=4)
         last_input_ms = now
 
     # handle OLED timeout (turn off display after inactivity)
